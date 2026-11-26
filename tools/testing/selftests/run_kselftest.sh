@@ -36,6 +36,15 @@ EOF
 	exit $1
 }
 
+require_arg()
+{
+	case "$2" in
+		"" | -*)
+			echo "$0: $1 requires an argument" >&2
+			usage 1 >&2 ;;
+	esac
+}
+
 COLLECTIONS=""
 TESTS=""
 SKIP=""
@@ -78,12 +87,15 @@ while true; do
 				shift
 			fi ;;
 		-t | --test)
+			require_arg "$1" "${2-}"
 			TESTS="$TESTS $2"
 			shift 2 ;;
 		-S | --skip)
+			require_arg "$1" "${2-}"
 			SKIP="$SKIP $2"
 			shift 2 ;;
 		-c | --collection)
+			require_arg "$1" "${2-}"
 			COLLECTIONS="$COLLECTIONS $2"
 			shift 2 ;;
 		-l | --list)
@@ -99,6 +111,7 @@ while true; do
 			RUN_IN_NETNS=1
 			shift ;;
 		-o | --override-timeout)
+			require_arg "$1" "${2-}"
 			kselftest_override_timeout="$2"
 			shift 2 ;;
 		-h | --help)
