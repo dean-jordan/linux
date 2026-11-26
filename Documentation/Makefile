@@ -69,7 +69,7 @@ endif
 # work or silently pass without Sphinx.
 
 htmldocs-redirects: $(srctree)/Documentation/.renames.txt
-	@tools/docs/gen-redirects.py --output $(BUILDDIR) < $<
+	@"$(srctree)/tools/docs/gen-redirects.py" --output "$(BUILDDIR)" < "$<"
 
 refcheckdocs:
 	$(Q)cd $(srctree); tools/docs/documentation-file-ref-check
