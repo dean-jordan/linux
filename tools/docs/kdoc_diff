@@ -224,7 +224,7 @@ class KernelDocRunner:
             print("Use -k <regex> to filter results\n\n\t$", end="")
             print(" ".join(cmd) + "\n")
 
-        return True
+        return result.returncode == 0
 
     def normal_run(self, tmp_dir, output_dir, kdoc_files):
         """Generate man, rst and errors, storing them at tmp_dir."""
@@ -497,12 +497,15 @@ def main():
         else:
             new_success = True
 
-    if not (old_success and new_success):
+    if not old_success or (not args.regression and not new_success):
         raise RuntimeError("Failed to generate documentation")
 
-    if not args.regression:
-        diff_manager = DiffManager()
-        diff_manager.diff_directories(old_cache, new_cache)
+    if args.regression:
+        return int(not new_success)
+
+    diff_manager = DiffManager()
+    diff_manager.diff_directories(old_cache, new_cache)
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
