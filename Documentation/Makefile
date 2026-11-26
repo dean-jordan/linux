@@ -42,9 +42,12 @@ FONTS_CONF_DENY_VF ?= $(HOME)/deny-vf
 # User-friendly check for sphinx-build
 HAVE_SPHINX := $(shell if which $(SPHINXBUILD) >/dev/null 2>&1; then echo 1; else echo 0; fi)
 
+sphinx-targets := htmldocs mandocs infodocs texinfodocs latexdocs epubdocs \
+		  xmldocs pdfdocs linkcheckdocs
+
 ifeq ($(HAVE_SPHINX),0)
 
-.DEFAULT:
+$(sphinx-targets):
 	$(warning The '$(SPHINXBUILD)' command was not found. Make sure you have Sphinx installed and in PATH, or set the SPHINXBUILD make variable to point to the full path of the '$(SPHINXBUILD)' executable.)
 	@echo
 	@$(srctree)/tools/docs/sphinx-pre-install
@@ -52,8 +55,7 @@ ifeq ($(HAVE_SPHINX),0)
 
 else # HAVE_SPHINX
 
-# Common documentation targets
-htmldocs mandocs infodocs texinfodocs latexdocs epubdocs xmldocs pdfdocs linkcheckdocs:
+$(sphinx-targets):
 	$(Q)PYTHONPYCACHEPREFIX="$(PYTHONPYCACHEPREFIX)" \
 		$(srctree)/tools/docs/sphinx-pre-install --version-check
 	+$(Q)PYTHONPYCACHEPREFIX="$(PYTHONPYCACHEPREFIX)" \
