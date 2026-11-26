@@ -164,43 +164,59 @@ run_one()
 
 in_netns()
 {
-	local name=$1
-	ip netns exec $name bash <<-EOF
-		BASE_DIR=$BASE_DIR
-		source $BASE_DIR/kselftest/runner.sh
-		logfile=$logfile
-		run_one $DIR $TEST
+	local name="$1" started="$2"
+	ip netns exec "$name" bash -s -- "$BASE_DIR" "$logfile" \
+		"$KTAP_TESTNO" "$DIR" "$TEST" "$started" <<-'EOF'
+		BASE_DIR="$1"
+		. "$BASE_DIR/kselftest/runner.sh" || exit 1
+		logfile="$2"
+		KTAP_TESTNO="$3"
+		: > "$6" || exit 1
+		run_one "$4" "$5"
 	EOF
 }
 
 run_in_netns()
 {
-	local tmplog="/tmp/$(mktemp -u ${BASENAME_TEST}-XXXXXX)"
-	local netns=$(mktemp -u ${BASENAME_TEST}-XXXXXX)
+	local netns="$1" started="$2"
+	local test_msg="selftests: $DIR: $BASENAME_TEST"
 	local rc
 
-	ip netns add $netns
-	if [ $? -ne 0 ]; then
-		ktap_print_msg "Warning: Create namespace failed for $BASENAME_TEST"
-		ktap_test_fail "selftests: $DIR: $BASENAME_TEST # Create NS failed"
+	if ! ip netns add "$netns"; then
+		ktap_test_fail "$test_msg # Create NS failed"
+		return "$KSFT_FAIL"
 	fi
-	ip -n $netns link set lo up
 
-	in_netns $netns &> $tmplog
-	rc=$?
+	if ip -n "$netns" link set lo up; then
+		in_netns "$netns" "$started"
+		rc=$?
+		if [ ! -e "$started" ]; then
+			ktap_test_fail "$test_msg # Enter NS failed"
+			rc=$KSFT_FAIL
+		fi
+	else
+		ktap_test_fail "$test_msg # Set up NS loopback failed"
+		rc=$KSFT_FAIL
+	fi
 
-	ip netns del $netns &> /dev/null
-	# Cat the log at once to avoid parallel netns logs.
-	cat $tmplog
-	rm -f $tmplog
-	return $rc
+	ip netns del "$netns" >/dev/null 2>&1
+	return "$rc"
 }
 
 run_many()
 {
 	DIR="${PWD#${BASE_DIR}/}"
-	local rc
-	pids=
+	local rc pid pids=
+	local netns_logs testno="$KTAP_TESTNO"
+
+	if [ -n "$RUN_IN_NETNS" ]; then
+		netns_logs=$(mktemp -d "${TMPDIR:-/tmp}/kselftest.XXXXXXXXXX") || {
+			for TEST in "$@"; do
+				ktap_test_fail "selftests: $DIR: ${TEST##*/} # mktemp failed"
+			done
+			return "$KSFT_FAIL"
+		}
+	fi
 
 	for TEST in "$@"; do
 		BASENAME_TEST=$(basename $TEST)
@@ -209,18 +225,24 @@ run_many()
 			cat /dev/null > "$logfile"
 		fi
 		if [ -n "$RUN_IN_NETNS" ]; then
-			run_in_netns &
+			# run_one may append diagnostics through /dev/stdout.
+			run_in_netns "ksft-${netns_logs##*.}-$KTAP_TESTNO" \
+				"$netns_logs/$KTAP_TESTNO.started" \
+				>> "$netns_logs/$KTAP_TESTNO" &
 			pids="$pids $!"
+			KTAP_TESTNO=$((KTAP_TESTNO + 1))
 		else
 			run_one "$DIR" "$TEST"
 		fi
 	done
 
-	# These variables are outputs of ktap_helpers.sh but since we've
-	# run the test in a subprocess we need to update them manually
+	# Print each complete result in test number order and count it in the
+	# parent shell since the KTAP counters updated by children are local.
 	for pid in $pids; do
 		wait "$pid"
 		rc=$?
+		cat "$netns_logs/$testno"
+		testno=$((testno + 1))
 		case "$rc" in
 		"$KSFT_PASS")
 			KTAP_CNT_PASS=$((KTAP_CNT_PASS + 1));;
@@ -234,4 +256,7 @@ run_many()
 			KTAP_CNT_FAIL=$((KTAP_CNT_FAIL + 1));;
 		esac
 	done
+	if [ -n "$netns_logs" ]; then
+		rm -r "$netns_logs"
+	fi
 }
