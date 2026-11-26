@@ -35,7 +35,7 @@ def get_min_python_bin(min_subver):
             if not RE_VERSION.search(p):
                 continue
 
-            ver = int(p.split(".")[1])
+            ver = int(p.rsplit(".", 1)[1])
             if ver < min_subver:
                 continue
 
@@ -45,7 +45,7 @@ def get_min_python_bin(min_subver):
     if not bins:
         return None
 
-    return sorted(bins, key=lambda x: (3, int(x.split(".")[1])))[0]
+    return sorted(bins, key=lambda x: (3, int(x.rsplit(".", 1)[1])))[0]
 
 
 # Minimal python versions. Please notice that for 3.4.3, older python
@@ -400,7 +400,7 @@ class SphinxVenv:
             if python_ver < (3, MIN_PYTHON_SUBVER):
                 sys.exit(f"Python {python_ver[0]}.{python_ver[1]} is too old.")
         else:
-            ver = int(python_bin.split(".")[1])
+            ver = int(python_bin.rsplit(".", 1)[1])
             python_ver = tuple([3, ver])
 
         vers = set(SPHINX_REQUIREMENTS.keys()) | set(args.versions)
