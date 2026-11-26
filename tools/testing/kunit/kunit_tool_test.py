@@ -865,6 +865,35 @@ class KUnitMainTest(unittest.TestCase):
 			args=None, build_dir=build_dir, filter_glob='', filter='', filter_action=None, timeout=300)
 		self.print_mock.assert_any_call(StrContains('Testing complete.'))
 
+	def test_build_commands_prepare_nested_build_dirs(self):
+		def check_build_dir(build_dir, **kwargs):
+			self.assertTrue(os.path.isdir(build_dir))
+			return self.linux_source_mock
+
+		self.mock_linux_init.side_effect = check_build_dir
+		with tempfile.TemporaryDirectory() as directory:
+			for command in ('config', 'build', 'run'):
+				output = os.path.join(directory, command, 'kernel')
+				with self.subTest(command=command), \
+				     mock.patch.dict(os.environ, {'KBUILD_OUTPUT': output}):
+					kunit.main([command])
+					self.assertTrue(os.path.isdir(os.path.join(output, '.kunit')))
+
+	def test_nested_build_dir_option_overrides_environment(self):
+		with tempfile.TemporaryDirectory() as directory:
+			output = os.path.join(directory, 'env', 'kernel')
+			build_dir = os.path.join(directory, 'option', 'kernel')
+			with mock.patch.dict(os.environ, {'KBUILD_OUTPUT': output}):
+				kunit.main(['build', '--build_dir', build_dir])
+			self.assertTrue(os.path.isdir(build_dir))
+			self.assertFalse(os.path.exists(output))
+
+	def test_exec_leaves_missing_build_dir_uncreated(self):
+		with tempfile.TemporaryDirectory() as directory:
+			build_dir = os.path.join(directory, 'missing', 'kernel')
+			kunit.main(['exec', '--build_dir', build_dir])
+			self.assertFalse(os.path.exists(build_dir))
+
 	@mock.patch.dict(os.environ, {'KBUILD_OUTPUT': '/tmp'})
 	def test_run_builddir_override(self):
 		build_dir = '.kunit'
