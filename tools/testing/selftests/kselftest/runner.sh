@@ -58,6 +58,28 @@ tap_timeout()
 
 run_one()
 {
+	local rc started=
+
+	# Reuse the inherited descriptor rather than reopening /dev/stdout.
+	if [ "$logfile" = /dev/stdout ]; then
+		run_one_test "$@" 4>&1
+		return $?
+	fi
+
+	{
+		started=1
+		run_one_test "$@"
+	} 4>>"$logfile"
+	rc=$?
+	if [ -z "$started" ]; then
+		ktap_test_fail "selftests: $1: ${2##*/} # Cannot open test log"
+		return "$KSFT_FAIL"
+	fi
+	return "$rc"
+}
+
+run_one_test()
+{
 	DIR="$1"
 	TEST="$2"
 
@@ -107,9 +129,9 @@ run_one()
 	# Command line timeout overrides the settings file
 	if [ -n "$kselftest_override_timeout" ]; then
 		kselftest_timeout="$kselftest_override_timeout"
-		ktap_print_msg "overriding timeout to $kselftest_timeout" >> "$logfile"
+		ktap_print_msg "overriding timeout to $kselftest_timeout" >&4
 	else
-		ktap_print_msg "timeout set to $kselftest_timeout" >> "$logfile"
+		ktap_print_msg "timeout set to $kselftest_timeout" >&4
 	fi
 
 	TEST_HDR_MSG="selftests: $DIR: $BASENAME_TEST"
@@ -142,7 +164,7 @@ run_one()
 		cd `dirname $TEST` > /dev/null
 		(((( tap_timeout "$cmd" 2>&1; echo $? >&3) |
 			tap_prefix >&4) 3>&1) |
-			(read xs; exit $xs)) 4>>"$logfile"
+			(read xs; exit $xs))
 		rc=$?
 		case "$rc" in
 		"$KSFT_PASS")
