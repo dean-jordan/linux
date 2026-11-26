@@ -214,38 +214,47 @@ TAP_START = re.compile(r'\s*TAP version ([0-9]+)$')
 KTAP_END = re.compile(r'\s*(List of all partitions:|'
 	'Kernel panic - not syncing: VFS:|reboot: System halted)')
 EXECUTOR_ERROR = re.compile(r'\s*kunit executor: (.*)$')
+PRINTK_TIMESTAMP = re.compile(r'^\[ *[0-9]+\.[0-9]+\]')
 
-def extract_tap_lines(kernel_output: Iterable[str]) -> LineStream:
+def extract_tap_lines(kernel_output: Iterable[str], *,
+		      normalize_timestamps: bool = False) -> LineStream:
 	"""Extracts KTAP lines from the kernel output."""
 	def isolate_ktap_output(kernel_output: Iterable[str]) \
 			-> Iterator[Tuple[int, str]]:
 		line_num = 0
 		started = False
+		timestamp_len = 0
 		for line in kernel_output:
 			line_num += 1
 			line = line.rstrip()  # remove trailing \n
-			if not started and KTAP_START.search(line):
-				# start extracting KTAP lines and set prefix
-				# to number of characters before version line
-				prefix_len = len(
-					line.split('KTAP version')[0])
+			if not started:
+				if KTAP_START.search(line):
+					title = 'KTAP version'
+				elif TAP_START.search(line):
+					title = 'TAP version'
+				else:
+					if EXECUTOR_ERROR.search(line):
+						yield line_num, line
+					continue
+
+				prefix_len = len(line.split(title)[0])
+				if normalize_timestamps:
+					timestamp = PRINTK_TIMESTAMP.match(line)
+					if timestamp:
+						timestamp_len = timestamp.end()
 				started = True
 				yield line_num, line[prefix_len:]
-			elif not started and TAP_START.search(line):
-				# start extracting KTAP lines and set prefix
-				# to number of characters before version line
-				prefix_len = len(line.split('TAP version')[0])
-				started = True
-				yield line_num, line[prefix_len:]
-			elif started and KTAP_END.search(line):
+			elif KTAP_END.search(line):
 				# stop extracting KTAP lines
 				break
-			elif started:
-				# remove the prefix, if any.
-				line = line[prefix_len:]
-				yield line_num, line
-			elif EXECUTOR_ERROR.search(line):
-				yield line_num, line
+			else:
+				offset = prefix_len
+				if timestamp_len:
+					# Saved logs can span a change in timestamp width.
+					timestamp = PRINTK_TIMESTAMP.match(line)
+					if timestamp:
+						offset += timestamp.end() - timestamp_len
+				yield line_num, line[offset:]
 	return LineStream(lines=isolate_ktap_output(kernel_output))
 
 KTAP_VERSIONS = [1]
@@ -697,7 +706,8 @@ def bubble_up_test_results(test: Test) -> None:
 	if status == TestStatus.FAILURE and test.counts.get_status() == TestStatus.SUCCESS:
 		counts.add_status(status)
 
-def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest: bool, printer: Printer) -> Test:
+def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest: bool,
+	       printer: Printer, *, allow_empty: bool = False) -> Test:
 	"""
 	Finds next test to parse in LineStream, creates new Test object,
 	parses any subtests of the test, populates Test object with all
@@ -754,6 +764,7 @@ def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest:
 		corresponding to the current test
 	is_subtest - boolean indicating whether test is a subtest
 	printer - Printer object to output results
+	allow_empty - accept a zero-test plan without reporting an error
 
 	Return:
 	Test object populated with characteristics and any subtests
@@ -831,9 +842,10 @@ def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest:
 		# Don't override a bad status if this test had one reported.
 		# Assumption: no subtests means CRASHED is from Test.__init__()
 		if test.status in (TestStatus.TEST_CRASHED, TestStatus.SUCCESS):
-			print_log(test.log, printer)
 			test.status = TestStatus.NO_TESTS
-			test.add_error(printer, '0 tests run!')
+			if not allow_empty or expected_count != 0:
+				print_log(test.log, printer)
+				test.add_error(printer, '0 tests run!')
 
 	# Add statuses to TestCounts attribute in Test object
 	bubble_up_test_results(test)
@@ -845,7 +857,56 @@ def parse_test(lines: LineStream, expected_num: int, log: List[str], is_subtest:
 		print_test_result(test, printer)
 	return test
 
-def parse_run_tests(kernel_output: Iterable[str], printer: Printer) -> Test:
+def _has_unclosed_suite(test: Test) -> bool:
+	# A suite with parsed children can be missing its own result line.
+	return any(
+		(subtest.subtests and subtest.status in (TestStatus.TEST_CRASHED, TestStatus.NO_TESTS))
+		or _has_unclosed_suite(subtest)
+		for subtest in test.subtests)
+
+def _parse_tap_documents(lines: LineStream, printer: Printer) -> Test:
+	document_header = re.compile(r'K?TAP version [0-9]+')
+
+	def document_lines() -> Iterator[Tuple[int, str]]:
+		has_header = False
+		while lines:
+			# Only unindented version lines start new documents.
+			if document_header.fullmatch(lines.peek()):
+				if has_header:
+					break
+				has_header = True
+			yield lines.line_number(), lines.pop()
+
+	result = Test()
+	result.name = 'main'
+	document_count = 0
+	invalid_document = False
+	unclosed_suite = False
+	while lines:
+		document = LineStream(document_lines())
+		test = parse_test(document, 0, [], False, printer, allow_empty=True)
+		document_count += 1
+		result.subtests.extend(test.subtests)
+		result.log.extend(test.log)
+		result.counts.add_subtest_counts(test.counts)
+		unclosed_suite = unclosed_suite or _has_unclosed_suite(test)
+		if test.status == TestStatus.NO_TESTS and test.expected_count != 0:
+			invalid_document = True
+		# Skip any lines left after the declared result count.
+		for _ in document:
+			pass
+
+	result.expected_count = len(result.subtests)
+	result.status = result.counts.get_status()
+	if result.status == TestStatus.NO_TESTS and not result.counts.errors:
+		print_log(result.log, printer)
+		result.add_error(printer, '0 tests run!')
+	elif result.ok_status() and (invalid_document or (document_count > 1 and unclosed_suite)):
+		result.status = TestStatus.FAILURE_TO_PARSE_TESTS
+	return result
+
+def parse_run_tests(kernel_output: Iterable[str], printer: Printer,
+		    *, all_documents: bool = False) -> Test:
 	"""
 	Using kernel output, extract KTAP lines, parse the lines for test
 	results and print condensed test results and summary line.
@@ -853,18 +914,21 @@ def parse_run_tests(kernel_output: Iterable[str], printer: Printer) -> Test:
 	Parameters:
 	kernel_output - Iterable object contains lines of kernel output
 	printer - Printer object to output results
+	all_documents - read consecutive top-level documents in a saved log
 
 	Return:
 	Test - the main test object with all subtests.
 	"""
 	printer.print_with_timestamp(DIVIDER)
-	lines = extract_tap_lines(kernel_output)
+	lines = extract_tap_lines(kernel_output, normalize_timestamps=all_documents)
 	test = Test()
 	if not lines:
 		test.name = '<missing>'
 		test.add_error(printer, 'Could not find any KTAP output. Did any KUnit tests run?\n' +
 			'Try running with the --raw_output=all option to see any log messages.')
 		test.status = TestStatus.FAILURE_TO_PARSE_TESTS
+	elif all_documents:
+		test = _parse_tap_documents(lines, printer)
 	else:
 		test = parse_test(lines, 0, [], False, printer)
 		if test.status != TestStatus.NO_TESTS:
