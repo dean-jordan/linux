@@ -110,36 +110,55 @@ while true; do
 	esac
 done
 
-# Add all selected collections to the explicit test list.
-if [ -n "$COLLECTIONS" ]; then
+collection_tests()
+{
+	local entry
+	printf '%s\n' "$available" | grep -F -e "$1:" |
+		while IFS= read -r entry; do
+			case "$entry" in
+			"$1":*) printf '%s\n' "$entry" ;;
+			esac
+		done
+}
+
+select_tests()
+(
+	# Split selector lists on whitespace without expanding pathnames.
+	set -f
+
+	# Add all selected collections to the explicit test list.
 	for collection in $COLLECTIONS ; do
-		found="$(echo "$available" | grep "^$collection:")"
+		found="$(collection_tests "$collection")"
 		if [ -z "$found" ] ; then
 			echo "No such collection '$collection'" >&2
 			exit 1
 		fi
 		TESTS="$TESTS $found"
 	done
-fi
-# Replace available test list with explicitly selected tests.
-if [ -n "$TESTS" ]; then
-	valid=""
-	for test in $TESTS ; do
-		found="$(echo "$available" | grep "^${test}$")"
-		if [ -z "$found" ] ; then
-			echo "No such test '$test'" >&2
-			exit 1
-		fi
-		valid="$valid $found"
-	done
-	available="$(echo "$valid" | sed -e 's/ /\n/g')"
-fi
-# Remove tests to be skipped from available list
-if [ -n "$SKIP" ]; then
+
+	# Replace the available list with explicitly selected tests.
+	if [ -n "$TESTS" ]; then
+		valid=""
+		for test in $TESTS ; do
+			found="$(printf '%s\n' "$available" | grep -Fx -e "$test")"
+			if [ -z "$found" ] ; then
+				echo "No such test '$test'" >&2
+				exit 1
+			fi
+			valid="$valid$found
+"
+		done
+		available="$valid"
+	fi
+
+	# Remove only the tests named in the skip list.
 	for skipped in $SKIP ; do
-		available="$(echo "$available" | grep -v "^${skipped}$")"
+		available="$(printf '%s\n' "$available" | grep -Fvx -e "$skipped")"
 	done
-fi
+	printf '%s\n' "$available"
+)
+
+available="$(select_tests)" || exit 1
 
 curdir=$(pwd)
 total=$(echo "$available" | wc -w)
@@ -150,7 +169,7 @@ ktap_set_plan "$total"
 
 for collection in $collections ; do
 	[ -w /dev/kmsg ] && echo "kselftest: Running tests in $collection" >> /dev/kmsg
-	tests=$(echo "$available" | grep "^$collection:" | cut -d: -f2)
+	tests=$(collection_tests "$collection" | cut -d: -f2)
 	$dryrun cd "$collection" && $dryrun run_many $tests
 	$dryrun cd "$curdir"
 done
