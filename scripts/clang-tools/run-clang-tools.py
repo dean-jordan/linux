@@ -66,7 +66,7 @@ def run_analysis(entry):
     if not file.endswith(".c") and not file.endswith(".cpp"):
         with lock:
             print(f"Skipping non-C file: '{file}'", file=sys.stderr)
-        return
+        return 0
     pargs = ["clang-tidy", "-p", args.path, "-checks=" + ",".join(checks)]
     if args.header_filter:
         pargs.append("-header-filter=" + args.header_filter)
@@ -77,6 +77,7 @@ def run_analysis(entry):
                        cwd=entry["directory"])
     with lock:
         sys.stderr.buffer.write(p.stdout)
+    return p.returncode
 
 
 def main():
@@ -89,7 +90,7 @@ def main():
     lock = multiprocessing.Lock()
     try:
         with multiprocessing.Pool(initializer=init, initargs=(lock, args)) as pool:
-            pool.map(run_analysis, datastore)
+            return int(any(pool.map(run_analysis, datastore)))
     except BrokenPipeError:
         # Python flushes standard streams on exit; redirect remaining output
         # to devnull to avoid another BrokenPipeError at shutdown
@@ -99,4 +100,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
