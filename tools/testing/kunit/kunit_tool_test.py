@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 from typing import Iterable
+import xml.etree.ElementTree as ET
 
 import kunit_config
 import kunit_parser
@@ -706,6 +707,34 @@ class KUnitJUnitTest(unittest.TestCase):
 					test=test_result)
 		print(junit_string)
 		return junit_string
+
+	def test_junit_escapes_unsupported_log_characters(self):
+		log = [
+			'KTAP version 1', '1..1',
+			'    # Subtest: suite', '    1..1',
+			'    # \x1b[32mgreen\x1b[0m\t& <caf\u00e9> \U0001f33f',
+			'    # next diagnostic',
+			'    ok 1 - case', 'ok 1 - suite',
+		]
+		test = kunit_parser.parse_run_tests(log, stdout)
+		result = ET.fromstring(kunit_junit.get_junit_result(test))
+		self.assertEqual(result.findtext('testsuite/testcase/system-out'),
+			'    # \\u001b[32mgreen\\u001b[0m\t& <caf\u00e9> \U0001f33f\n'
+			'    # next diagnostic')
+
+	def test_junit_escapes_unsupported_name_and_skip_characters(self):
+		suite_name = 'suite\uffff name'
+		log = [
+			'KTAP version 1', '1..1',
+			f'    # Subtest: {suite_name}', '    1..1',
+			'    ok 1 - case\x01 name # SKIP check\x07 & retry',
+			f'ok 1 - {suite_name}',
+		]
+		test = kunit_parser.parse_run_tests(log, stdout)
+		result = ET.fromstring(kunit_junit.get_junit_result(test))
+		self.assertEqual(result.find('testsuite').get('name'), 'suite\\uffff name')
+		self.assertEqual(result.find('testsuite/testcase').get('name'), 'case\\u0001 name')
+		self.assertEqual(result.findtext('testsuite/testcase/skipped'), 'check\\u0007 & retry')
 
 	def test_failed_test_junit(self):
 		result = self._junit_string('test_is_test_passed-failure.log')

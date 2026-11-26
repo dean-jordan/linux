@@ -4,15 +4,25 @@
 #
 # Copyright (C) 2026, Google LLC and David Gow.
 
+import re
 from xml.sax.saxutils import quoteattr, XMLGenerator
 import xml.etree.ElementTree as ET
 from kunit_parser import Test, TestStatus
 from typing import Optional
 
+# XML 1.0 forbids these characters even in text and attribute values.
+# ElementTree escapes markup but leaves these code points untouched.
+_XML_INVALID_CHARS = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]')
+
+
+def _xml_text(text: str) -> str:
+	return _XML_INVALID_CHARS.sub(lambda match: f'\\u{ord(match[0]):04x}', text)
+
+
 # Get a string representing a tes suite (including subtests) in JUnit XML
 def get_test_suite(test: Test, parent: Optional[ET.Element]) -> ET.Element:
 	suite_attrs = {
-		'name': test.name,
+		'name': _xml_text(test.name),
 		'tests': str(test.counts.total()),
 		'failures': str(test.counts.failed),
 		'skipped': str(test.counts.skipped),
@@ -28,16 +38,17 @@ def get_test_suite(test: Test, parent: Optional[ET.Element]) -> ET.Element:
 		if subtest.subtests:
 			get_test_suite(subtest, test_suite_element)
 			continue
-		test_case_element = ET.SubElement(test_suite_element, 'testcase', {'name': subtest.name})
+		test_case_element = ET.SubElement(test_suite_element, 'testcase',
+						 {'name': _xml_text(subtest.name)})
 		if subtest.status == TestStatus.FAILURE:
 			ET.SubElement(test_case_element, 'failure', {}).text = 'Test Failed'
 		elif subtest.status == TestStatus.SKIPPED:
-			ET.SubElement(test_case_element, 'skipped', {}).text = subtest.skip_reason
+			ET.SubElement(test_case_element, 'skipped', {}).text = _xml_text(subtest.skip_reason)
 		elif subtest.status == TestStatus.TEST_CRASHED:
 			ET.SubElement(test_case_element, 'error', {}).text = 'Test Crashed'
 
 		if subtest.log:
-			ET.SubElement(test_case_element, 'system-out', {}).text = "\n".join(subtest.log)
+			ET.SubElement(test_case_element, 'system-out', {}).text = _xml_text("\n".join(subtest.log))
 
 	return test_suite_element
 
