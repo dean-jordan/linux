@@ -151,7 +151,14 @@ ktap_set_plan "$total"
 for collection in $collections ; do
 	[ -w /dev/kmsg ] && echo "kselftest: Running tests in $collection" >> /dev/kmsg
 	tests=$(echo "$available" | grep "^$collection:" | cut -d: -f2)
-	$dryrun cd "$collection" && $dryrun run_many $tests
+	if ! $dryrun cd "$collection"; then
+		for test in $tests; do
+			ktap_test_fail \
+				"selftests: $collection: ${test##*/} # Cannot enter collection"
+		done
+		continue
+	fi
+	$dryrun run_many $tests
 	$dryrun cd "$curdir"
 done
 
