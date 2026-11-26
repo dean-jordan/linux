@@ -313,7 +313,8 @@ command line arguments:
 
 - ``--run_isolated``: If set, boots the kernel for each individual suite/test.
   This is useful for debugging a non-hermetic test, one that
-  might pass/fail based on what ran before it.
+  might pass/fail based on what ran before it. If JSON or JUnit output is
+  requested, each report covers all the isolated runs.
 
 - ``--raw_output``: If set, generates unformatted output from kernel. Possible options are:
 

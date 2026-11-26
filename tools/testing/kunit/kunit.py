@@ -16,9 +16,9 @@ import time
 
 assert sys.version_info >= (3, 7), "Python version is too old"
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import kunit_json
 import kunit_junit
@@ -190,6 +190,12 @@ def exec_tests(linux: kunit_kernel.LinuxSourceTree, request: KunitExecRequest) -
 
 	metadata = kunit_json.Metadata(arch=linux.arch(), build_dir=request.build_dir, def_config='kunit_defconfig')
 
+	report_runs: Optional[List[kunit_parser.Test]] = None
+	parse_request = request
+	if len(filter_globs) > 1 and not request.raw_output and (request.json or request.junit):
+		report_runs = []
+		parse_request = replace(request, json=None, junit=None)
+
 	test_counts = kunit_parser.TestCounts()
 	exec_time = 0.0
 	for i, filter_glob in enumerate(filter_globs):
@@ -204,7 +210,7 @@ def exec_tests(linux: kunit_kernel.LinuxSourceTree, request: KunitExecRequest) -
 			filter_action=request.filter_action,
 			build_dir=request.build_dir)
 
-		_, test_result = parse_tests(request, metadata, run_result)
+		_, test_result = parse_tests(parse_request, metadata, run_result)
 		# run_kernel() doesn't block on the kernel exiting.
 		# That only happens after we get the last line of output from `run_result`.
 		# So exec_time here actually contains parsing + execution time, which is fine.
@@ -212,12 +218,17 @@ def exec_tests(linux: kunit_kernel.LinuxSourceTree, request: KunitExecRequest) -
 		exec_time += test_end - test_start
 
 		test_counts.add_subtest_counts(test_result.counts)
+		if report_runs is not None:
+			report_runs.append(test_result)
 
 	if len(filter_globs) == 1 and test_counts.crashed > 0:
 		bd = request.build_dir
 		print('The kernel seems to have crashed; you can decode the stack traces with:')
 		print('$ scripts/decode_stacktrace.sh {}/vmlinux {} < {} | tee {}/decoded.log | {} parse'.format(
 				bd, bd, kunit_kernel.get_outfile_path(bd), bd, sys.argv[0]))
+
+	if report_runs:
+		_write_test_reports(request, metadata, _merge_isolated_results(report_runs, test_counts))
 
 	kunit_status = _map_to_overall_status(test_counts.get_status())
 	return KunitResult(status=kunit_status, elapsed_time=exec_time)
@@ -257,7 +268,38 @@ def parse_tests(request: KunitParseRequest, metadata: kunit_json.Metadata, input
 	if request.failed:
 		kunit_parser.print_test(test, request.failed, stdout)
 	kunit_parser.print_summary_line(test, stdout)
+	_write_test_reports(request, metadata, test)
 
+	if test.status != kunit_parser.TestStatus.SUCCESS:
+		return KunitResult(KunitStatus.TEST_FAILURE, parse_time), test
+
+	return KunitResult(KunitStatus.SUCCESS, parse_time), test
+
+def _merge_isolated_results(results: List[kunit_parser.Test],
+			    counts: kunit_parser.TestCounts) -> kunit_parser.Test:
+	report = kunit_parser.Test()
+	report.name = 'main'
+	report.counts = counts
+	suites: Dict[str, kunit_parser.Test] = {}
+	for result in results:
+		for suite in result.subtests:
+			# A suite without subtests is reported as a leaf, for example
+			# when it crashes. Keep those results as separate entries.
+			previous = suites.get(suite.name) if suite.subtests else None
+			if previous is None:
+				report.subtests.append(suite)
+				if suite.subtests:
+					suites[suite.name] = suite
+				continue
+
+			# Test isolation can run different cases of one suite in
+			# separate boots. Keep them together in the exported suite.
+			previous.subtests.extend(suite.subtests)
+			previous.counts.add_subtest_counts(suite.counts)
+	return report
+
+def _write_test_reports(request: KunitParseRequest, metadata: kunit_json.Metadata,
+			test: kunit_parser.Test) -> None:
 	if request.json:
 		json_str = kunit_json.get_json_result(
 					test=test,
@@ -276,11 +318,6 @@ def parse_tests(request: KunitParseRequest, metadata: kunit_json.Metadata, input
 		else:
 			kunit_junit.write_junit_result(test=test,filename=request.junit)
 			stdout.print_with_timestamp(f"Test results stored in {os.path.abspath(request.junit)}")
-
-	if test.status != kunit_parser.TestStatus.SUCCESS:
-		return KunitResult(KunitStatus.TEST_FAILURE, parse_time), test
-
-	return KunitResult(KunitStatus.SUCCESS, parse_time), test
 
 def run_tests(linux: kunit_kernel.LinuxSourceTree,
 	      request: KunitRequest) -> KunitResult:

@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 from typing import Iterable
+import xml.etree.ElementTree as ET
 
 import kunit_config
 import kunit_parser
@@ -1017,6 +1018,76 @@ class KUnitMainTest(unittest.TestCase):
 			mock.call(args=None, build_dir='.kunit', filter_glob='suite.test2', filter='', filter_action=None, timeout=300),
 			mock.call(args=None, build_dir='.kunit', filter_glob='suite2.test1', filter='', filter_action=None, timeout=300),
 		])
+
+	def _run_isolated_with_reports(self, command, isolation, *report_args):
+		cases = {
+			'first_suite': [('ok', 'passes'), ('not ok', 'fails')],
+			'second_suite': [('ok', 'skips # SKIP unavailable')],
+		}
+		test_list = ['TAP version 14', 'first_suite.passes',
+			     'first_suite.fails', 'second_suite.skips']
+		boots = [test_list]
+		for suite, tests in cases.items():
+			groups = [[test] for test in tests] if isolation == 'test' else [tests]
+			for group in groups:
+				lines = ['KTAP version 1', '1..1', '    KTAP version 1',
+					 f'    # Subtest: {suite}', f'    1..{len(group)}']
+				lines.extend(f'    {status} {index} {name}'
+					     for index, (status, name) in enumerate(group, 1))
+				suite_status = 'not ok' if any(status == 'not ok' for status, _ in group) else 'ok'
+				boots.append(lines + [f'{suite_status} 1 {suite}'])
+
+		self.linux_source_mock.arch.return_value = 'um'
+		self.linux_source_mock.run_kernel.side_effect = boots
+		with self.assertRaises(SystemExit) as error:
+			kunit.main([command, f'--run_isolated={isolation}', *report_args])
+		self.assertEqual(error.exception.code, 1)
+
+	def _assert_isolated_json_report(self, report):
+		self.assertEqual(report['misc'], {
+			'tests': 3, 'passed': 1, 'failed': 1, 'crashed': 0,
+			'skipped': 1, 'errors': 0,
+		})
+		groups = report['sub_groups']
+		self.assertEqual([group['name'] for group in groups], ['first_suite', 'second_suite'])
+		self.assertEqual(groups[0]['test_cases'], [
+			{'name': 'passes', 'status': 'PASS'},
+			{'name': 'fails', 'status': 'FAIL'},
+		])
+		self.assertEqual(groups[1]['test_cases'], [{'name': 'skips', 'status': 'SKIP'}])
+
+	def _assert_isolated_junit_report(self, report):
+		self.assertEqual(report.attrib, {
+			'name': 'main', 'tests': '3', 'failures': '1',
+			'skipped': '1', 'errors': '0',
+		})
+		suites = report.findall('testsuite')
+		self.assertEqual([suite.get('name') for suite in suites], ['first_suite', 'second_suite'])
+		self.assertEqual(suites[0].get('tests'), '2')
+		self.assertIsNotNone(suites[0].find("testcase[@name='passes']"))
+		self.assertIsNotNone(suites[0].find("testcase[@name='fails']/failure"))
+		self.assertEqual(suites[1].findtext("testcase[@name='skips']/skipped"), 'unavailable')
+
+	def test_run_isolated_writes_complete_report_files(self):
+		for command, isolation in (('run', 'suite'), ('exec', 'test')):
+			with self.subTest(isolation=isolation), tempfile.TemporaryDirectory() as output:
+				json_path = os.path.join(output, 'results.json')
+				junit_path = os.path.join(output, 'results.xml')
+				self._run_isolated_with_reports(command, isolation, f'--json={json_path}',
+							       f'--junit={junit_path}')
+				with open(json_path) as report:
+					self._assert_isolated_json_report(json.load(report))
+				self._assert_isolated_junit_report(ET.parse(junit_path).getroot())
+
+	def test_run_isolated_prints_one_complete_report(self):
+		formats = (
+			('--json', json.loads, self._assert_isolated_json_report),
+			('--junit', ET.fromstring, self._assert_isolated_junit_report),
+		)
+		for flag, decode, verify in formats:
+			with self.subTest(flag=flag), mock.patch.object(sys, 'stdout', new_callable=io.StringIO) as output:
+				self._run_isolated_with_reports('exec', 'test', flag)
+				verify(decode(output.getvalue()))
 
 	@mock.patch.object(kunit, '_list_tests')
 	@mock.patch.object(sys, 'stdout', new_callable=io.StringIO)
