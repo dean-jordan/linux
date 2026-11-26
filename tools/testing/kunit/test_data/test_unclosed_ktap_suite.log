@@ -1,0 +1,9 @@
+KTAP version 1
+1..1
+ok 1 - builtin_test
+KTAP version 1
+1..1
+    KTAP version 1
+    # Subtest: module
+    1..1
+    ok 1 - module_test

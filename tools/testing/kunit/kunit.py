@@ -227,7 +227,8 @@ def _map_to_overall_status(test_status: kunit_parser.TestStatus) -> KunitStatus:
 		return KunitStatus.SUCCESS
 	return KunitStatus.TEST_FAILURE
 
-def parse_tests(request: KunitParseRequest, metadata: kunit_json.Metadata, input_data: Iterable[str]) -> Tuple[KunitResult, kunit_parser.Test]:
+def parse_tests(request: KunitParseRequest, metadata: kunit_json.Metadata,
+		input_data: Iterable[str], *, all_documents: bool = False) -> Tuple[KunitResult, kunit_parser.Test]:
 	parse_start = time.time()
 
 	if request.raw_output:
@@ -251,7 +252,8 @@ def parse_tests(request: KunitParseRequest, metadata: kunit_json.Metadata, input
 		default_printer = null_printer
 
 	# Actually parse the test results.
-	test = kunit_parser.parse_run_tests(input_data, default_printer)
+	test = kunit_parser.parse_run_tests(input_data, default_printer,
+					   all_documents=all_documents)
 	parse_time = time.time() - parse_start
 
 	if request.failed:
@@ -601,7 +603,7 @@ def parse_handler(cli_args: argparse.Namespace) -> None:
 					junit=cli_args.junit,
 					summary=cli_args.summary,
 					failed=cli_args.failed)
-	result, _ = parse_tests(request, metadata, kunit_output)
+	result, _ = parse_tests(request, metadata, kunit_output, all_documents=True)
 	if result.status != KunitStatus.SUCCESS:
 		sys.exit(1)
 

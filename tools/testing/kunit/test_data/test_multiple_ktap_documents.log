@@ -1,0 +1,15 @@
+[    0.837271] KTAP version 1
+[    0.837276] 1..1
+[    0.837288]     KTAP version 1
+[    0.837289]     # Subtest: builtin
+[    0.837290]     1..1
+[    0.837291]     ok 1 - builtin_test
+[    0.837292] ok 1 - builtin
+[    2.912834] unrelated kernel message
+[    4.275113] KTAP version 1
+[    4.275114] 1..1
+[    4.275115]     KTAP version 1
+[    4.275116]     # Subtest: module
+[    4.275117]     1..1
+[    4.275118]     not ok 1 - module_test
+[    4.275119] not ok 1 - module

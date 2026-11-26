@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 from typing import Iterable
+import xml.etree.ElementTree as ET
 
 import kunit_config
 import kunit_parser
@@ -724,6 +725,67 @@ class KUnitJUnitTest(unittest.TestCase):
 		result = self._junit_string('test_is_test_passed-no_tests_run_with_header.log')
 		self.assertTrue("tests=\"0\"" in result)
 		self.assertFalse("testcase" in result)
+
+
+class KUnitParseCommandTest(unittest.TestCase):
+	def test_multiple_documents(self):
+		log = _test_data_path('test_multiple_ktap_documents.log')
+		with tempfile.TemporaryDirectory() as out_dir:
+			json_path = os.path.join(out_dir, 'results.json')
+			junit_path = os.path.join(out_dir, 'results.xml')
+			result = subprocess.run([sys.executable, kunit.__file__, 'parse', log,
+						 '--json=' + json_path, '--junit=' + junit_path],
+						capture_output=True, text=True)
+			self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+			self.assertIn('Ran 2 tests: passed: 1, failed: 1', result.stdout)
+			with open(json_path) as report:
+				groups = json.load(report)['sub_groups']
+			self.assertEqual([group['name'] for group in groups], ['builtin', 'module'])
+			self.assertEqual(groups[1]['test_cases'], [{'name': 'module_test', 'status': 'FAIL'}])
+			junit = ET.parse(junit_path).getroot()
+			self.assertEqual(junit.get('tests'), '2')
+			self.assertEqual(junit.get('failures'), '1')
+			self.assertIsNotNone(junit.find("testsuite[@name='module']/testcase/failure"))
+
+	def test_timestamp_width_changes_between_documents(self):
+		with open(_test_data_path('test_multiple_ktap_documents.log')) as log:
+			output = log.read().replace('[    4.', '[100000.')
+		result = subprocess.run([sys.executable, kunit.__file__, 'parse'],
+					input=output, capture_output=True, text=True)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn('Ran 2 tests: passed: 1, failed: 1', result.stdout)
+
+	def test_truncated_document_before_results(self):
+		log = _test_data_path('test_truncated_ktap_document.log')
+		result = subprocess.run([sys.executable, kunit.__file__, 'parse', log],
+					capture_output=True, text=True)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn('Ran 2 tests: passed: 1, crashed: 1', result.stdout)
+
+	def test_missing_suite_result_in_later_document(self):
+		with open(_test_data_path('test_unclosed_ktap_suite.log')) as log:
+			output = log.read()
+		result = subprocess.run([sys.executable, kunit.__file__, 'parse'],
+					input=output, capture_output=True, text=True)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn('missing subtest result line!', result.stdout)
+		self.assertIn('Ran 2 tests: passed: 2, errors: 1', result.stdout)
+
+		# Standalone parsing has historically accepted this suite.
+		later_document = output[output.index('KTAP version 1', 1):]
+		result = subprocess.run([sys.executable, kunit.__file__, 'parse'],
+					input=later_document, capture_output=True, text=True)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+	def test_empty_document_before_results(self):
+		with open(_test_data_path('test_is_test_passed-no_tests_run_with_header.log')) as empty:
+			with open(_test_data_path('test_parse_ktap_output.log')) as tests:
+				result = subprocess.run([sys.executable, kunit.__file__, 'parse'],
+							input=empty.read() + tests.read(),
+							capture_output=True, text=True)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertIn('Ran 3 tests: passed: 3', result.stdout)
+		self.assertNotIn('0 tests run!', result.stdout)
 
 
 class KUnitMainTest(unittest.TestCase):
