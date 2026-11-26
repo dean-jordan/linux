@@ -484,7 +484,8 @@ def add_parse_opts(parser: argparse.ArgumentParser) -> None:
 			    action='store_true')
 
 
-def tree_from_args(cli_args: argparse.Namespace) -> kunit_kernel.LinuxSourceTree:
+def tree_from_args(cli_args: argparse.Namespace, *,
+		   create_build_dir: bool = False) -> kunit_kernel.LinuxSourceTree:
 	"""Returns a LinuxSourceTree based on the user's arguments."""
 	# Allow users to specify multiple arguments in one string, e.g. '-smp 8'
 	qemu_args: List[str] = []
@@ -498,6 +499,10 @@ def tree_from_args(cli_args: argparse.Namespace) -> kunit_kernel.LinuxSourceTree
 		# --kunitconfig options to have differing options.
 		kunitconfigs = [kunit_kernel.ALL_TESTS_CONFIG_PATH] + kunitconfigs
 
+	if create_build_dir:
+		# LinuxSourceTree may copy a default .kunitconfig into this directory.
+		os.makedirs(cli_args.build_dir, exist_ok=True)
+
 	return kunit_kernel.LinuxSourceTree(cli_args.build_dir,
 			kunitconfig_paths=kunitconfigs,
 			kconfig_add=cli_args.kconfig_add,
@@ -508,10 +513,7 @@ def tree_from_args(cli_args: argparse.Namespace) -> kunit_kernel.LinuxSourceTree
 
 
 def run_handler(cli_args: argparse.Namespace) -> None:
-	if not os.path.exists(cli_args.build_dir):
-		os.mkdir(cli_args.build_dir)
-
-	linux = tree_from_args(cli_args)
+	linux = tree_from_args(cli_args, create_build_dir=True)
 	request = KunitRequest(build_dir=cli_args.build_dir,
 					make_options=cli_args.make_options,
 					jobs=cli_args.jobs,
@@ -535,11 +537,7 @@ def run_handler(cli_args: argparse.Namespace) -> None:
 
 
 def config_handler(cli_args: argparse.Namespace) -> None:
-	if cli_args.build_dir and (
-			not os.path.exists(cli_args.build_dir)):
-		os.mkdir(cli_args.build_dir)
-
-	linux = tree_from_args(cli_args)
+	linux = tree_from_args(cli_args, create_build_dir=bool(cli_args.build_dir))
 	request = KunitConfigRequest(build_dir=cli_args.build_dir,
 						make_options=cli_args.make_options)
 	result = config_tests(linux, request)
@@ -551,7 +549,7 @@ def config_handler(cli_args: argparse.Namespace) -> None:
 
 
 def build_handler(cli_args: argparse.Namespace) -> None:
-	linux = tree_from_args(cli_args)
+	linux = tree_from_args(cli_args, create_build_dir=bool(cli_args.build_dir))
 	request = KunitBuildRequest(build_dir=cli_args.build_dir,
 					make_options=cli_args.make_options,
 					jobs=cli_args.jobs)
